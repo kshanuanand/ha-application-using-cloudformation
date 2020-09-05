@@ -1,0 +1,1 @@
+WebApp LB URL: http://MyPro-WebAp-3UM05Y6AF1GE-985117797.us-west-2.elb.amazonaws.com

@@ -1,0 +1,47 @@
+[
+    {
+        "ParameterKey": "EnvironmentName",
+        "ParameterValue": "UdacityProject"
+    },
+    {
+    	"ParameterKey": "EC2InstanceType",
+    	"ParameterValue": "t3.small"
+    },
+    {
+    	"ParameterKey": "EC2InstanceTypeBastian",
+    	"ParameterValue": "t2.micro"
+    },
+    {
+    	"ParameterKey": "EC2InstanceVolSize",
+    	"ParameterValue": "10"
+    },
+    {
+    	"ParameterKey": "MinEc2InstanceCount",
+    	"ParameterValue": "4"
+    },
+    {
+    	"ParameterKey": "MaxEc2InstanceCount",
+    	"ParameterValue": "4"
+    },
+    {
+    	"ParameterKey": "EC2AMI",
+    	"ParameterValue": "ami-0a634ae95e11c6f91"
+    },
+    {
+    	"ParameterKey": "SSH2BastianCidr",
+    	"ParameterValue": "122.170.131.193/32"
+    },
+    {
+    	"ParameterKey": "AppProfileName",
+    	"ParameterValue": "UdacityS3ReadOnlyEC2"
+    },
+    {
+    	"ParameterKey":"S3BucketName",
+    	"ParameterValue":"cloudformation-bucket-demo"
+    },
+   	{
+   		"ParameterKey": "WebAppEC2Password",
+   		"ParameterValue": "UbuntU"
+   	}
+
+]

@@ -1,0 +1,289 @@
+Description: >
+  Cloudformation script to launch WebApplication
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  EC2InstanceType:
+    Description: Type of instance to spawn
+    Type: String
+    Default: t3.medium
+
+  EC2InstanceVolSize:
+    Description: Size of disk for each EC2 Instance
+    Type: String
+    Default: "12"
+
+  MinEc2InstanceCount:
+    Description: Minimum number of EC2 instance to launch
+    Type: String
+    Default: "2"
+
+  MaxEc2InstanceCount:
+    Description: Maximum number of EC2 instance to launch
+    Type: String
+    Default: "4"
+
+  EC2AMI:
+    Description: AMI ID for creating the EC2 instance
+    Type: String
+    Default: "ami-0a634ae95e11c6f91"
+
+  SSH2BastianCidr:
+    Description: Cidr block to allow access to Bastian host
+    Type: String
+    Default: 0.0.0.0/0
+
+  AppProfileName:
+    Description: Name of Profile to Ec2 to allow read only access to S3 Bucket
+    Type: String
+    Default: UdacityS3ReadOnlyEC2
+
+  S3BucketName:
+    Description: Name of s3 bucket holding webapp files
+    Type: String
+    Default: cloudformation-bucket-demo
+
+  WebAppEC2Password:
+    Description: Paaword to be set on WebApplication to allow access from bastian host
+    Type: String
+
+  EC2InstanceTypeBastian:
+    Description: Type of instance to spawn for bastian host
+    Type: String
+    Default: t2.micro
+
+Resources:
+
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security configuration to allow http connection to Load Balancers
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} WebApp LBSecGroup
+
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: BastianHost
+    Properties:
+      GroupDescription: Security configuration to allow connection to our hosts and local only
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !Join ['/',[!GetAtt BastianHost.PrivateIp,'32']]
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} WebServerSecGroup
+
+  WebAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+         #!/bin/bash
+         apt-get update -y
+         apt-get install apache2 -y
+         systemctl start apache2.service
+         apt-get install awscli -y
+         cd /var/www/html/
+         aws s3 cp s3://${S3BucketName}/index.html .
+         echo "${WebAppEC2Password}"| passwd --stdin ubuntu
+      ImageId: !Ref EC2AMI
+      #KeyName: aws-cli-test
+      IamInstanceProfile: !Ref RootInstanceProfile
+      SecurityGroups:
+      - Ref: WebServerSecGroup
+      InstanceType: !Ref EC2InstanceType
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdk"
+        Ebs:
+          VolumeSize: !Ref EC2InstanceVolSize
+
+  WebAppGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+      - Fn::ImportValue:
+          !Sub "${EnvironmentName}-PRIV-NETS"
+      LaunchConfigurationName:
+        Ref: WebAppLaunchConfig
+      MinSize: !Ref MinEc2InstanceCount
+      MaxSize: !Ref MaxEc2InstanceCount
+      TargetGroupARNs:
+      - Ref: WebAppTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} WebAppGroup AutoScalling
+          PropagateAtLaunch: "true"
+
+  WebAppLB :
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+      SecurityGroups:
+      - Ref: LBSecGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} WebAppLB
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: WebAppTargetGroup
+      LoadBalancerArn:
+        Ref: WebAppLB
+      Port: '80'
+      Protocol: HTTP
+
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref 'WebAppTargetGroup'
+      Conditions:
+      - Field: path-pattern
+        Values: [/]
+      ListenerArn: !Ref 'Listener'
+      Priority: 1
+
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 5
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 10
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-VPCID"
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} WebAppTargetGroup
+
+  ProfileWithRolesForOurApp:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles:
+        - UdacityS3ReadOnlyEC2
+
+  RoleCreation:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-RoleCreation
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+              - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub ${EnvironmentName}-RolePolicies
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - 
+              Effect: Allow
+              Action:
+                - "s3:Get*"
+                - "s3:List*"
+              Resource: "*"
+
+  RootInstanceProfile: 
+    Type: "AWS::IAM::InstanceProfile"
+    Properties: 
+      Path: "/"
+      Roles: 
+        - 
+          Ref: "RoleCreation"
+
+  BastianSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security configuration to allow connection to our hosts and local only
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !Ref SSH2BastianCidr
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} BastianSecGroup
+
+  BastianHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdk"
+        Ebs:
+          VolumeSize: 8
+      InstanceType: !Ref EC2InstanceTypeBastian
+      KeyName: aws-cli-test
+      ImageId: !Ref EC2AMI
+      SecurityGroupIds:
+      - Ref: BastianSecGroup
+      SubnetId: 
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-PUB1-SN"
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Bastian Host
+
+Outputs:
+  VPC:
+    Description: A reference to LoadBalancer
+    Value: !Join ["", ["http://",!GetAtt WebAppLB.DNSName]]
+    Export:
+      Name: !Sub ${EnvironmentName}-LB
